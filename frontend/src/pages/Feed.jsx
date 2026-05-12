@@ -238,13 +238,19 @@ const Feed = () => {
       return;
     }
 
-    const newPhotos = files.map(file => ({
-      file,
-      preview: URL.createObjectURL(file),
-      id: Math.random().toString(36)
-    }));
+    // Convert to base64 for persistence
+    files.forEach(file => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setSelectedPhotos(prev => [...prev, {
+          file,
+          preview: reader.result, // base64 instead of blob
+          id: Math.random().toString(36)
+        }]);
+      };
+      reader.readAsDataURL(file);
+    });
 
-    setSelectedPhotos(prev => [...prev, ...newPhotos]);
     toast({
       title: 'Photos ajoutées',
       description: `${files.length} photo(s) ajoutée(s)`
