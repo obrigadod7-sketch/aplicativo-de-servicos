@@ -6,6 +6,7 @@ import { Textarea } from '../components/ui/textarea';
 import { ArrowLeft, MapPin, Camera, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useToast } from '../hooks/use-toast';
+import { processMediaFile, safeSetLocalStorage } from '../utils/mediaUtils';
 
 const PublicarDemanda = () => {
   const navigate = useNavigate();
@@ -110,11 +111,18 @@ const PublicarDemanda = () => {
     // Get user data
     const user = JSON.parse(localStorage.getItem('user') || '{}');
 
+    // Build media objects (typed) — base64 already
+    const media = selectedPhotos.map((m) => ({
+      type: m.type || 'image',
+      dataUrl: m.dataUrl || m.preview,
+    }));
+
     // Create new post object
     const newPost = {
       id: `post-${Date.now()}`,
+      userId: user.email || '1',
       userName: user.name || 'Você',
-      userAvatar: 'https://i.pravatar.cc/150?img=33',
+      userAvatar: user.avatar || 'https://i.pravatar.cc/150?img=33',
       time: 'agora mesmo',
       description: `${formData.title}\n\n${formData.description}`,
       location: formData.address,
@@ -123,13 +131,21 @@ const PublicarDemanda = () => {
       likes: 0,
       recommends: 0,
       responses: 0,
-      photos: selectedPhotos.map(p => p.preview)
+      media,
     };
 
-    // Save to localStorage
+    // Save to localStorage with quota protection
     const existingPosts = JSON.parse(localStorage.getItem('userPosts') || '[]');
-    existingPosts.unshift(newPost); // Add to beginning
-    localStorage.setItem('userPosts', JSON.stringify(existingPosts));
+    existingPosts.unshift(newPost);
+    const saveResult = safeSetLocalStorage('userPosts', JSON.stringify(existingPosts));
+    if (!saveResult.success) {
+      toast({
+        title: 'Não foi possível salvar',
+        description: saveResult.error,
+        variant: 'destructive',
+      });
+      return;
+    }
 
     // Increment post count
     incrementPostCount();
@@ -220,12 +236,16 @@ const PublicarDemanda = () => {
             {selectedPhotos.length > 0 && (
               <div className="grid grid-cols-3 gap-2 mb-3">
                 {selectedPhotos.map((photo) => (
-                  <div key={photo.id} className="relative aspect-square">
-                    <img
-                      src={photo.preview}
-                      alt="Preview"
-                      className="w-full h-full object-cover rounded-lg border border-gray-200"
-                    />
+                  <div key={photo.id} className="relative aspect-square bg-gray-50 rounded-lg overflow-hidden border border-gray-200">
+                    {photo.type === 'video' ? (
+                      <video src={photo.preview} className="w-full h-full object-cover" muted playsInline />
+                    ) : (
+                      <img
+                        src={photo.preview}
+                        alt="Preview"
+                        className="w-full h-full object-cover"
+                      />
+                    )}
                     <button
                       type="button"
                       onClick={() => removePhoto(photo.id)}
@@ -239,16 +259,17 @@ const PublicarDemanda = () => {
             )}
 
             {selectedPhotos.length < 3 && (
-              <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+              <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50 transition-colors" data-testid="publicar-media-upload">
                 <Camera className="w-8 h-8 text-gray-400 mb-2" />
-                <span className="text-sm text-gray-600">Clique para adicionar fotos</span>
-                <span className="text-xs text-gray-400 mt-1">Máximo 3 fotos</span>
+                <span className="text-sm text-gray-600">Clique para adicionar fotos ou vídeos</span>
+                <span className="text-xs text-gray-400 mt-1">Máximo 3 arquivos (vídeo até 10MB)</span>
                 <input
                   type="file"
-                  accept="image/*"
+                  accept="image/*,video/*"
                   multiple
                   onChange={handlePhotoUpload}
                   className="hidden"
+                  data-testid="publicar-media-input"
                 />
               </label>
             )}

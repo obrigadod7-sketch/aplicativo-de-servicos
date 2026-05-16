@@ -7,6 +7,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '../components/ui/avatar';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Heart, Share2, MessageSquare, MapPin, Globe, Camera, X } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
+import { processMediaFile, safeSetLocalStorage, MEDIA_LIMITS } from '../utils/mediaUtils';
 
 const mockPosts = [
   {
@@ -113,30 +114,50 @@ const PostCard = ({ post }) => {
             </h3>
             <p className="text-xs text-gray-800 leading-relaxed">{post.description}</p>
 
-            {/* Display photos if available */}
-            {post.photos && post.photos.length > 0 && (
-              <div className={`mt-2 mb-2 ${post.photos.length === 1 ? '' : 'grid grid-cols-2 gap-2'}`}>
-                {post.photos.filter(photo => photo && (photo.startsWith('http') || photo.startsWith('data:'))).map((photo, idx) => (
-                  <div 
-                    key={idx}
-                    className={`relative overflow-hidden rounded-md border border-gray-200 ${
-                      post.photos.length === 1 ? 'max-h-[500px]' : 'aspect-square'
-                    }`}
-                  >
-                    <img
-                      src={photo}
-                      alt={`Foto ${idx + 1}`}
-                      className={`w-full h-full ${
-                        post.photos.length === 1 ? 'object-contain bg-gray-50' : 'object-cover'
+            {/* Display media (photos + videos) if available */}
+            {(() => {
+              // Backward compat: post.photos may be array of strings OR new media objects.
+              const rawMedia = Array.isArray(post.media)
+                ? post.media
+                : Array.isArray(post.photos)
+                  ? post.photos.map((p) =>
+                      typeof p === 'string' ? { type: 'image', dataUrl: p } : p
+                    )
+                  : [];
+              const media = rawMedia.filter(
+                (m) => m && m.dataUrl && (m.dataUrl.startsWith('http') || m.dataUrl.startsWith('data:'))
+              );
+              if (media.length === 0) return null;
+              return (
+                <div className={`mt-2 mb-2 ${media.length === 1 ? '' : 'grid grid-cols-2 gap-2'}`}>
+                  {media.map((m, idx) => (
+                    <div
+                      key={idx}
+                      data-testid={`post-media-${idx}`}
+                      className={`relative overflow-hidden rounded-md border border-gray-200 bg-gray-50 ${
+                        media.length === 1 ? 'max-h-[500px]' : 'aspect-square'
                       }`}
-                      onError={(e) => {
-                        e.target.style.display = 'none';
-                      }}
-                    />
-                  </div>
-                ))}
-              </div>
-            )}
+                    >
+                      {m.type === 'video' ? (
+                        <video
+                          src={m.dataUrl}
+                          controls
+                          playsInline
+                          className={`w-full h-full ${media.length === 1 ? 'object-contain' : 'object-cover'}`}
+                        />
+                      ) : (
+                        <img
+                          src={m.dataUrl}
+                          alt={`Mídia ${idx + 1}`}
+                          className={`w-full h-full ${media.length === 1 ? 'object-contain' : 'object-cover'}`}
+                          onError={(e) => { e.target.style.display = 'none'; }}
+                        />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
 
             <div className="flex items-center gap-1.5 mt-2 text-[10px] text-gray-600">
               <MapPin className="w-3 h-3" />
@@ -227,43 +248,52 @@ const Feed = () => {
     setPosts(allPosts);
   }, []);
 
-  const handlePhotoSelect = (e) => {
-    const files = Array.from(e.target.files);
+  const handlePhotoSelect = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
     if (files.length + selectedPhotos.length > 3) {
       toast({
-        title: 'Limite de photos',
-        description: 'Vous pouvez ajouter maximum 3 photos',
-        variant: 'destructive'
+        title: 'Limite de mídia',
+        description: 'Você pode adicionar no máximo 3 fotos/vídeos',
+        variant: 'destructive',
       });
+      e.target.value = '';
       return;
     }
 
-    // Convert to base64 for persistence
-    files.forEach(file => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setSelectedPhotos(prev => [...prev, {
-          file,
-          preview: reader.result, // base64 instead of blob
-          id: Math.random().toString(36)
-        }]);
-      };
-      reader.readAsDataURL(file);
-    });
-
-    toast({
-      title: 'Photos ajoutées',
-      description: `${files.length} photo(s) ajoutée(s)`
-    });
+    let added = 0;
+    for (const file of files) {
+      try {
+        const processed = await processMediaFile(file);
+        setSelectedPhotos((prev) => [
+          ...prev,
+          {
+            type: processed.type,
+            preview: processed.dataUrl,
+            dataUrl: processed.dataUrl,
+            id: Math.random().toString(36),
+          },
+        ]);
+        added += 1;
+      } catch (err) {
+        toast({
+          title: 'Erro ao processar arquivo',
+          description: err.message || 'Falha ao processar mídia',
+          variant: 'destructive',
+        });
+      }
+    }
+    if (added > 0) {
+      toast({
+        title: 'Mídia adicionada',
+        description: `${added} arquivo(s) pronto(s) para publicar`,
+      });
+    }
+    e.target.value = '';
   };
 
   const removePhoto = (photoId) => {
-    setSelectedPhotos(prev => {
-      const updated = prev.filter(p => p.id !== photoId);
-      const removed = prev.find(p => p.id === photoId);
-      if (removed) URL.revokeObjectURL(removed.preview);
-      return updated;
-    });
+    setSelectedPhotos((prev) => prev.filter((p) => p.id !== photoId));
   };
 
   const handlePostSubmit = () => {
@@ -295,8 +325,11 @@ const Feed = () => {
     const userName = currentUser.name || 'Você';
     const userAvatar = currentUser.avatar || 'https://i.pravatar.cc/150?img=33';
 
-    // Convert selected photos to base64 or keep URLs
-    const photoUrls = selectedPhotos.map(photo => photo.preview);
+    // Convert selected media into typed objects for persistence
+    const media = selectedPhotos.map((m) => ({
+      type: m.type || 'image',
+      dataUrl: m.dataUrl || m.preview,
+    }));
 
     // Create new post with user data
     const newPost = {
@@ -311,16 +344,24 @@ const Feed = () => {
       likes: 0,
       recommends: 0,
       responses: 0,
-      photos: photoUrls
+      media,
     };
 
-    // Save to localStorage
+    // Save to localStorage with quota protection
     const existingPosts = JSON.parse(localStorage.getItem('userPosts') || '[]');
     const updatedPosts = [newPost, ...existingPosts];
-    localStorage.setItem('userPosts', JSON.stringify(updatedPosts));
+    const saveResult = safeSetLocalStorage('userPosts', JSON.stringify(updatedPosts));
+    if (!saveResult.success) {
+      toast({
+        title: 'Não foi possível salvar',
+        description: saveResult.error,
+        variant: 'destructive',
+      });
+      return;
+    }
 
     // Add to beginning of posts
-    setPosts(prev => [newPost, ...prev]);
+    setPosts((prev) => [newPost, ...prev]);
 
     // Clear form
     setPostDescription('');
@@ -345,14 +386,11 @@ const Feed = () => {
       return;
     }
 
-    // Use placeholder images if photos were selected
-    const photoUrls = selectedPhotos.length > 0 
-      ? [
-          'https://images.unsplash.com/photo-1581094271901-8022df4466f9?w=600&h=400&fit=crop',
-          'https://images.unsplash.com/photo-1621905251189-08b45d6a269e?w=600&h=400&fit=crop',
-          'https://images.unsplash.com/photo-1581578731548-c64695cc6952?w=600&h=400&fit=crop'
-        ].slice(0, selectedPhotos.length)
-      : [];
+    // Use selected media (already compressed/base64)
+    const media = selectedPhotos.map((m) => ({
+      type: m.type || 'image',
+      dataUrl: m.dataUrl || m.preview,
+    }));
 
     // Create new public post
     const newPost = {
@@ -366,16 +404,24 @@ const Feed = () => {
       likes: 0,
       recommends: 0,
       responses: 0,
-      photos: photoUrls
+      media,
     };
 
-    // Save to localStorage
+    // Save to localStorage with quota protection
     const existingPosts = JSON.parse(localStorage.getItem('userPosts') || '[]');
     const updatedPosts = [newPost, ...existingPosts];
-    localStorage.setItem('userPosts', JSON.stringify(updatedPosts));
+    const saveResult = safeSetLocalStorage('userPosts', JSON.stringify(updatedPosts));
+    if (!saveResult.success) {
+      toast({
+        title: 'Não foi possível salvar',
+        description: saveResult.error,
+        variant: 'destructive',
+      });
+      return;
+    }
 
     // Add to beginning of posts
-    setPosts(prev => [newPost, ...prev]);
+    setPosts((prev) => [newPost, ...prev]);
 
     // Clear form and close modal
     setPublicPostData({ description: '', address: '', budget: '', category: '' });
@@ -596,13 +642,14 @@ const Feed = () => {
                             </button>
                           </>
                         ) : (
-                          <label className="w-full h-full border-2 border-dashed border-gray-300 rounded-lg flex flex-col items-center justify-center cursor-pointer hover:border-green-400 hover:bg-white transition-all bg-white">
+                          <label className="w-full h-full border-2 border-dashed border-gray-300 rounded-lg flex flex-col items-center justify-center cursor-pointer hover:border-green-400 hover:bg-white transition-all bg-white" data-testid="feed-media-upload-slot">
                             <Camera className="w-5 h-5 text-gray-400 mb-1" />
                             <input
                               type="file"
-                              accept="image/*"
+                              accept="image/*,video/*"
                               onChange={handlePhotoSelect}
                               className="hidden"
+                              data-testid="feed-media-input"
                             />
                           </label>
                         )}
@@ -625,6 +672,7 @@ const Feed = () => {
               <Button 
                 onClick={handlePostSubmit}
                 className="w-full bg-green-500 hover:bg-green-600 text-white rounded-full h-9 font-semibold shadow-sm text-sm"
+                data-testid="feed-publish-button"
               >
                 Publicar minha solicitação
               </Button>
@@ -689,8 +737,12 @@ const Feed = () => {
 
               <div className="grid grid-cols-3 gap-3">
                 {selectedPhotos.map((photo) => (
-                  <div key={photo.id} className="relative aspect-square border-2 border-gray-200 rounded-md overflow-hidden">
-                    <img src={photo.preview} alt="Preview" className="w-full h-full object-cover" />
+                  <div key={photo.id} className="relative aspect-square border-2 border-gray-200 rounded-md overflow-hidden bg-gray-50">
+                    {photo.type === 'video' ? (
+                      <video src={photo.preview} className="w-full h-full object-cover" muted playsInline />
+                    ) : (
+                      <img src={photo.preview} alt="Preview" className="w-full h-full object-cover" />
+                    )}
                     <button
                       onClick={() => removePhoto(photo.id)}
                       className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1 hover:bg-red-600"
@@ -705,7 +757,7 @@ const Feed = () => {
                     <span className="text-xs text-gray-500">Adicionar</span>
                     <input
                       type="file"
-                      accept="image/*"
+                      accept="image/*,video/*"
                       onChange={handlePhotoSelect}
                       className="hidden"
                     />
@@ -751,6 +803,7 @@ const Feed = () => {
             <Button
               onClick={handlePublicPostSubmit}
               className="w-full bg-green-500 hover:bg-green-600 text-white rounded-full h-11 font-semibold text-sm"
+              data-testid="feed-public-publish-button"
             >
               Postar minha demanda
             </Button>
