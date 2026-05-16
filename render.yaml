@@ -1,31 +1,41 @@
 services:
-  # Backend Service
+  # Backend Service (FastAPI)
   - type: web
     name: jatai-regiao-backend
     env: python
     plan: free
-    buildCommand: cd backend && pip install -r requirements.txt
-    startCommand: cd backend && uvicorn server:app --host 0.0.0.0 --port $PORT
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
       - key: MONGO_URL
-        sync: false # You'll need to add this in Render dashboard
-    
-  # Frontend Service  
+        sync: false   # set in Render dashboard (MongoDB Atlas connection string)
+      - key: DB_NAME
+        value: jatai_regiao
+      - key: CORS_ORIGINS
+        value: https://jatai-regiao-frontend.onrender.com
+
+  # Frontend (Static site — CRA production build)
   - type: web
     name: jatai-regiao-frontend
-    env: node
+    env: static
     plan: free
-    buildCommand: cd frontend && yarn install && yarn build
-    startCommand: cd frontend && yarn start
+    rootDir: frontend
+    buildCommand: yarn install --frozen-lockfile && yarn build
+    staticPublishPath: build
     envVars:
       - key: NODE_VERSION
         value: 18.17.0
       - key: REACT_APP_BACKEND_URL
         value: https://jatai-regiao-backend.onrender.com
-        
-# Database (MongoDB)
-# Note: You'll need to create a MongoDB Atlas account or use Render's MongoDB addon
-# and add the MONGO_URL environment variable in the Render dashboard
+    routes:
+      # SPA fallback so React Router routes resolve
+      - type: rewrite
+        source: /*
+        destination: /index.html
+
+# IMPORTANT: Create MongoDB Atlas (free M0) and paste its connection string
+# into MONGO_URL via the Render dashboard before first deploy.
